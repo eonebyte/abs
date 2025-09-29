@@ -202,6 +202,75 @@ class Requisition {
             }
         }
     }
+
+    async getPurchaseRevHistories(server, userId, page, pageSize) {
+        let dbClient;
+        try {
+            dbClient = await server.pg.connect();
+
+            const offset = (page - 1) * pageSize;
+
+            const query = `
+                SELECT
+                    wfa.record_id,
+                    wfa.created, mr.documentno,
+                    regexp_replace(wfa.textmsg, '^IsApproved=N - ', '') AS textmsg
+                FROM AD_WF_Activity wfa
+                JOIN m_requisition mr ON mr.m_requisition_id = wfa.record_id
+                WHERE
+                    wfa.ad_table_id=702 AND wfa.wfstate = 'CA'
+                    AND wfa.ad_user_id = $1
+                ORDER BY wfa.created DESC
+                LIMIT $2 OFFSET $3`;
+
+            const totalCountQuery = `
+                SELECT
+                        COUNT(*)
+                    FROM AD_WF_Activity wfa
+                    JOIN m_requisition mr ON mr.m_requisition_id = wfa.record_id
+                    WHERE
+                        wfa.ad_table_id=702 AND wfa.wfstate = 'CA'
+                        AND wfa.ad_user_id = $1
+            `;
+
+            const [result, totalCountResult] = await Promise.all([
+                dbClient.query(query, [userId, pageSize, offset]),
+                dbClient.query(totalCountQuery, [userId])
+            ]);
+
+            const totalCount = parseInt(totalCountResult.rows[0].count, 10);
+
+            if (result.rows.length === 0) {
+                return {
+                    success: false,
+                    message: `Rev History not found`,
+                    meta: { count: 0 },
+                    data: []
+                };
+
+            }
+
+            return {
+                success: true,
+                message: 'Rev History fetched successfully',
+                meta: {
+                    total: totalCount,
+                    count: result.rowCount,
+                    per_page: pageSize,
+                    current_page: page,
+                    total_pages: Math.ceil(totalCount / pageSize)
+                },
+                data: result.rows
+            }
+        } catch (error) {
+            console.error('Error in Rev History:', error);
+            return [];
+        } finally {
+            if (dbClient) {
+                await dbClient.release();
+            }
+        }
+    }
 }
 
 async function requisition(fastify, opts) {

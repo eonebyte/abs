@@ -1613,7 +1613,7 @@ class Order {
             if (result.rows.length === 0) {
                 return {
                     success: false,
-                    message: `Rev History not found ${keyDept}`,
+                    message: `Rev History not found`,
                     meta: { count: 0 },
                     data: []
                 };
