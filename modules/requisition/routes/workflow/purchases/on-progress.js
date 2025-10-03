@@ -1,5 +1,5 @@
 export default async function purchaseRequisitionOnProgress(fastify, opts) {
-    fastify.get('/purchases/onprogress', async (request, reply) => {
+    fastify.get('/onprogress', async (request, reply) => {
         try {
             const { userId } = request.query;
             const purchaseOrders = await fastify.requisition.getPurchaseOnProgress(fastify, userId);

@@ -77,7 +77,7 @@ class Requisition {
                 message: 'Purchase orders workflow on progress fetched successfully',
                 meta: { count: result.rowCount },
                 data: result.rows.map(row => ({
-                    id: row.c_order_id,
+                    record_id: Number(row.m_requisition_id),
                     documentNo: row.documentno,
                     description: row.description,
                     plant: row.plant,
