@@ -805,6 +805,7 @@ class Order {
                     SELECT DISTINCT ON (wfa.record_id, au.ad_user_id)
                         wfa.record_id,
                         wfa.created,
+                        wfa.updated,
                         au.name AS user_name,
                         au.title,
                         wfa.ad_wf_activity_uu AS barcode
@@ -821,6 +822,7 @@ class Order {
                         title,
                         barcode,
                         created,
+                        updated,
                         ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY created) AS nourut
                     FROM wf_activities
                 ),
@@ -855,7 +857,7 @@ class Order {
                         END) AS legalizedby,
                          MAX(CASE
                             WHEN h.aborted THEN NULL
-                            WHEN r.nourut = 2 THEN r.created
+                            WHEN r.nourut = 2 THEN r.updated
                         END) AS legalizedCreated,
                         MAX(CASE
                             WHEN h.aborted THEN NULL
