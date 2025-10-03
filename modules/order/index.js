@@ -806,6 +806,7 @@ class Order {
                         wfa.record_id,
                         wfa.created,
                         wfa.updated,
+                        wfa.textmsg,
                         au.name AS user_name,
                         au.title,
                         wfa.ad_wf_activity_uu AS barcode
@@ -823,6 +824,7 @@ class Order {
                         barcode,
                         created,
                         updated,
+                        textmsg,
                         ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY created) AS nourut
                     FROM wf_activities
                 ),
@@ -851,6 +853,7 @@ class Order {
                         MAX(CASE WHEN r.nourut = 1 THEN r.created END) AS preparedCreated,
                         MAX(CASE WHEN r.nourut = 1 THEN r.title END) AS preparedTitle,
                         MAX(CASE WHEN r.nourut = 1 THEN r.barcode END) AS preparedBarcode,
+                        MAX(CASE WHEN r.nourut = 1 THEN r.textmsg END) AS preparedMsg,
                         MAX(CASE
                             WHEN h.aborted THEN NULL
                             WHEN r.nourut = 2 THEN r.user_name
@@ -867,10 +870,15 @@ class Order {
                             WHEN h.aborted THEN NULL
                             WHEN r.nourut = 2 THEN r.barcode
                         END) AS legalizedBarcode,
+                        MAX(CASE
+                            WHEN h.aborted THEN NULL
+                            WHEN r.nourut = 2 THEN r.textmsg
+                        END) AS legalizedMsg,
                         MAX(CASE WHEN r.nourut = 3 THEN r.user_name END) AS approvedby,
                         MAX(CASE WHEN r.nourut = 3 THEN r.created END) AS approvedCreated,
                         MAX(CASE WHEN r.nourut = 3 THEN r.title END) AS approvedTitle,
-                        MAX(CASE WHEN r.nourut = 3 THEN r.barcode END) AS approvedBarcode
+                        MAX(CASE WHEN r.nourut = 3 THEN r.barcode END) AS approvedBarcode,
+                        MAX(CASE WHEN r.nourut = 3 THEN r.textmsg END) AS approvedMsg
                     FROM ranked_approvers r
                     LEFT JOIN has_aborted h ON h.record_id = r.record_id
                     GROUP BY r.record_id, h.aborted
@@ -888,7 +896,10 @@ class Order {
                     fa.approvedTitle,
                     fa.preparedBarcode,
                     fa.legalizedBarcode,
-                    fa.approvedBarcode
+                    fa.approvedBarcode,
+                    fa.preparedMsg,
+                    fa.legalizedMsg,
+                    fa.approvedMsg
                 FROM C_Order co
                 JOIN c_bpartner cb ON cb.c_bpartner_id = co.c_bpartner_id
                 JOIN c_bpartner_location cbl ON co.c_bpartner_location_id = cbl.c_bpartner_location_id
