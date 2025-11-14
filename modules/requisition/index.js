@@ -271,6 +271,146 @@ class Requisition {
             }
         }
     }
+
+
+    async getFlowProgress(server, orderId) {
+        let dbClient;
+        try {
+            dbClient = await server.pg.connect();
+
+            const query = `
+                WITH wf_activities AS (
+                    SELECT DISTINCT ON (wfa.record_id, au.ad_user_id)
+                        wfa.record_id,
+                        wfa.created,
+                        wfa.updated,
+                        wfa.textmsg,
+                        au.name AS user_name,
+                        au.title,
+                        wfa.ad_wf_activity_uu AS barcode
+                    FROM ad_wf_activity wfa
+                    JOIN ad_user au ON wfa.ad_user_id = au.ad_user_id
+                    WHERE wfa.ad_wf_node_id > 1000000
+                    AND wfa.wfstate = 'CC'
+                    ORDER BY wfa.record_id, au.ad_user_id, wfa.created ASC
+                ),
+                ranked_approvers AS (
+                    SELECT
+                        record_id,
+                        user_name,
+                        title,
+                        barcode,
+                        created,
+                        updated,
+                        textmsg,
+                        ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY created) AS nourut
+                    FROM wf_activities
+                ),
+                latest_process AS (
+                    SELECT DISTINCT ON (record_id)
+                        ad_wf_process_id,
+                        record_id
+                    FROM ad_wf_process
+                    ORDER BY record_id, created DESC
+                ),
+                has_aborted AS (
+                    SELECT
+                        lp.record_id,
+                        COUNT(*) FILTER (
+                            WHERE awa.wfstate = 'CA'
+                            AND awa.ad_wf_node_id > 1000000
+                        ) > 0 AS aborted
+                    FROM latest_process lp
+                    JOIN ad_wf_activity awa ON awa.ad_wf_process_id = lp.ad_wf_process_id
+                    GROUP BY lp.record_id
+                ),
+                final_approvers AS (
+                    SELECT
+                        r.record_id,
+                        MAX(CASE WHEN r.nourut = 1 THEN r.user_name END) AS preparedby,
+                        MAX(CASE WHEN r.nourut = 1 THEN r.created END) AS preparedCreated,
+                        MAX(CASE WHEN r.nourut = 1 THEN r.title END) AS preparedTitle,
+                        MAX(CASE WHEN r.nourut = 1 THEN r.barcode END) AS preparedBarcode,
+                        MAX(CASE WHEN r.nourut = 1 THEN r.textmsg END) AS preparedMsg,
+                        MAX(CASE
+                            WHEN h.aborted THEN NULL
+                            WHEN r.nourut = 2 THEN r.user_name
+                        END) AS legalizedby,
+                         MAX(CASE
+                            WHEN h.aborted THEN NULL
+                            WHEN r.nourut = 2 THEN r.updated
+                        END) AS legalizedCreated,
+                        MAX(CASE
+                            WHEN h.aborted THEN NULL
+                            WHEN r.nourut = 2 THEN r.title
+                        END) AS legalizedTitle,
+                        MAX(CASE
+                            WHEN h.aborted THEN NULL
+                            WHEN r.nourut = 2 THEN r.barcode
+                        END) AS legalizedBarcode,
+                        MAX(CASE
+                            WHEN h.aborted THEN NULL
+                            WHEN r.nourut = 2 THEN r.textmsg
+                        END) AS legalizedMsg,
+                        MAX(CASE WHEN r.nourut = 3 THEN r.user_name END) AS approvedby,
+                        MAX(CASE WHEN r.nourut = 3 THEN r.created END) AS approvedCreated,
+                        MAX(CASE WHEN r.nourut = 3 THEN r.title END) AS approvedTitle,
+                        MAX(CASE WHEN r.nourut = 3 THEN r.barcode END) AS approvedBarcode,
+                        MAX(CASE WHEN r.nourut = 3 THEN r.textmsg END) AS approvedMsg
+                    FROM ranked_approvers r
+                    LEFT JOIN has_aborted h ON h.record_id = r.record_id
+                    GROUP BY r.record_id, h.aborted
+                )
+                SELECT
+                    mr.m_requisition_id,
+                    fa.preparedby,
+                    fa.preparedCreated,
+                    fa.legalizedby,
+                    fa.legalizedCreated,
+                    fa.approvedby,
+                    fa.approvedCreated,
+                    fa.preparedTitle,
+                    fa.legalizedTitle,
+                    fa.approvedTitle,
+                    fa.preparedBarcode,
+                    fa.legalizedBarcode,
+                    fa.approvedBarcode,
+                    fa.preparedMsg,
+                    fa.legalizedMsg,
+                    fa.approvedMsg
+                FROM M_Requisition mr
+                LEFT JOIN final_approvers fa ON fa.record_id = mr.m_requisition_id
+                WHERE mr.ad_client_id = 1000003
+                AND mr.ad_org_id = 1000003
+                AND mr.m_requisition_id = $1`;
+
+            const result = await dbClient.query(query, [orderId]);
+
+
+            return {
+                success: true,
+                message: 'Purchase orders workflow on progress fetched successfully',
+                meta: { count: result.rowCount },
+                data: result.rows.map(row => ({
+                    ...row,
+                    c_order_id: Number(row.c_order_id)
+                }))
+            };
+        } catch (error) {
+            server.log.error(error);
+            return {
+                success: false,
+                message: 'Failed to fetch purchase orders workflow on progress',
+                errors: [error.message],
+                data: []
+            };
+        } finally {
+            if (dbClient) {
+                await dbClient.release();
+            }
+        }
+    }
+
 }
 
 async function requisition(fastify, opts) {
