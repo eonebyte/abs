@@ -411,6 +411,87 @@ class Requisition {
         }
     }
 
+    async getPurchaseRevisionActivity(server, recordId) {
+        let dbClient;
+        try {
+            dbClient = await server.pg.connect();
+
+            const mainQuery = `
+                SELECT 
+                    ROW_NUMBER() OVER (ORDER BY wfp.updated ASC) AS norev,
+                    wfp.ad_wf_process_id,
+                    wfp.record_id
+                FROM 
+                    AD_WF_Process wfp
+                WHERE 
+                    wfp.ad_table_id = 702
+                    AND wfp.wfstate = 'CA'
+                    AND wfp.record_id = $1
+                ORDER BY wfp.updated ASC
+                `;
+            const mainRes = await dbClient.query(mainQuery, [recordId]);
+
+            const data = [];
+
+            // 2. Loop tiap WF Process → ambil detail activity
+            for (const row of mainRes.rows) {
+                const detailQuery = `
+                            SELECT 
+                                CASE
+                                    WHEN wfa.textmsg LIKE 'IsApproved=Y%-%' 
+                                        THEN REGEXP_REPLACE(wfa.textmsg, '^IsApproved=Y - ', 'Approved: ')
+                                    WHEN wfa.textmsg LIKE 'IsApproved=N%-%' 
+                                        THEN REGEXP_REPLACE(wfa.textmsg, '^IsApproved=N - ', 'Not Approved: ')
+                                    ELSE NULL
+                                END AS status_msg,
+                                wfa.updated,
+                                au."name",
+                                au.title
+                            FROM 
+                                ad_wf_activity wfa
+                            JOIN ad_user au ON au.ad_user_id = wfa.updatedby
+                            WHERE 
+                            wfa.ad_table_id = 702
+                            AND wfa.ad_wf_process_id = $1
+                            AND wfa.textmsg LIKE 'IsApproved=%'
+                            ORDER BY updated ASC
+                    `;
+                const detailRes = await dbClient.query(detailQuery, [row.ad_wf_process_id]);
+
+                const activities = detailRes.rows
+                    .filter(r => r.status_msg !== null)
+                    .map(r => ({
+                        msg: r.status_msg,
+                        dateActivity: r.updated,
+                        userName: r.name,
+                        userRole: r.title
+                    }));
+
+                data.push({
+                    norev: row.norev,
+                    wf_process_id: row.ad_wf_process_id,
+                    activity: activities
+                });
+            }
+
+            return { data };
+
+        } catch (error) {
+            server.log.error(error);
+            return {
+                success: false,
+                message: 'Failed to fetch purchase orders workflow on progress',
+                errors: [error.message],
+                data: []
+            };
+        } finally {
+            if (dbClient) {
+                await dbClient.release();
+            }
+        }
+    }
+
+
 }
 
 async function requisition(fastify, opts) {
