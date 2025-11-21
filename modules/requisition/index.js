@@ -492,6 +492,127 @@ class Requisition {
     }
 
 
+    async getPriceHistoryDetailV2(server, productId, limit) {
+        let dbClient;
+        try {
+            dbClient = await server.pg.connect();
+
+            const query = `
+            WITH
+            ProductOrderLines AS (
+                SELECT
+                    ol.c_orderline_id, ol.c_order_id, p.m_product_id,
+                    p.name AS "ProductName", ol.priceactual, ol.qtyordered, ol.linenetamt
+                FROM C_OrderLine ol
+                JOIN C_Order o ON ol.c_order_id = o.c_order_id
+                JOIN M_Product p ON ol.m_product_id = p.m_product_id
+                WHERE ol.m_product_id = $1 AND o.issotrx = 'N'
+            ),
+            ReceiptData AS (
+                SELECT
+                    pol.c_orderline_id, SUM(iol.movementqty) AS "TotalReceivedQty", MAX(io.movementdate) AS "LastReceiptDate"
+                FROM M_InOutLine iol
+                JOIN M_InOut io ON iol.m_inout_id = io.m_inout_id
+                JOIN ProductOrderLines pol ON iol.c_orderline_id = pol.c_orderline_id
+                GROUP BY pol.c_orderline_id
+            )
+            SELECT
+                pol."ProductName", bp.name AS "SupplierName", o.documentno AS "PoNumber",
+                o.dateordered AS "PoDate", cur.iso_code AS "Currency", pol.priceactual AS "PricePerUnit",
+                pol.qtyordered AS "Quantity", pt.netdays AS "TermOfPaymentDays", pol.linenetamt AS "TotalPrice",
+                -- COALESCE tidak lagi diperlukan karena INNER JOIN menjamin baris ini tidak akan pernah NULL
+                rd."TotalReceivedQty" AS "ReceivedQty",
+                rd."LastReceiptDate"
+            FROM ProductOrderLines pol
+            JOIN C_Order o ON pol.c_order_id = o.c_order_id
+            JOIN C_BPartner bp ON o.c_bpartner_id = bp.c_bpartner_id
+            LEFT JOIN C_PaymentTerm pt ON o.c_paymentterm_id = pt.c_paymentterm_id
+            LEFT JOIN C_Currency cur ON o.c_currency_id = cur.c_currency_id
+            -- ==================== PERUBAHAN UTAMA DI SINI ====================
+            -- Mengubah LEFT JOIN menjadi INNER JOIN untuk memfilter hanya PO yang memiliki receipt
+            INNER JOIN ReceiptData rd ON pol.c_orderline_id = rd.c_orderline_id
+            -- ===============================================================
+            ORDER BY o.dateordered DESC
+            LIMIT $2;`;
+
+            // PERBAIKAN: Gunakan 'limit', bukan 'dateOrdered'
+            const result = await dbClient.query(query, [productId, limit]);
+            // PERBAIKAN: Definisikan 'rows'
+            const { rows } = result;
+
+            // Jika tidak ada data, kembalikan null sebagai sinyal ke handler
+            if (rows.length === 0) {
+                return null;
+            }
+
+            /// --- Logika Transformasi Data ---
+            const priceHistory = rows.map(row => {
+                const quantity = parseInt(row.Quantity, 10);
+                const receivedQty = parseInt(row.ReceivedQty, 10);
+
+                // ==================== PERUBAHAN UTAMA DI SINI ====================
+                // Tentukan status receipt berdasarkan perbandingan kuantitas
+                let statusReceipt = 'Partial';
+                if (receivedQty >= quantity) { // Pakai >= untuk antisipasi over-receipt
+                    statusReceipt = 'Full';
+                }
+                // ===============================================================
+
+                return {
+                    poNumber: row.PoNumber,
+                    poDate: row.PoDate,
+                    pricePerUnit: parseFloat(row.PricePerUnit),
+                    quantity: quantity,
+                    receipt: {
+                        received: receivedQty,
+                        total: quantity
+                    },
+                    // Tambahkan field baru ke dalam respons
+                    statusReceipt: statusReceipt,
+                    lastReceiptDate: row.LastReceiptDate,
+                    outstandingQty: quantity - receivedQty,
+                    termOfPaymentDays: row.TermOfPaymentDays ? parseInt(row.TermOfPaymentDays, 10) : null,
+                    totalPrice: parseFloat(row.TotalPrice)
+                };
+            });
+
+            const totalRecords = priceHistory.length;
+            const sums = priceHistory.reduce((acc, item) => {
+                acc.totalPriceSum += item.pricePerUnit;
+                acc.totalQtySum += item.quantity;
+                acc.totalReceiptSum += item.receipt.received;
+                acc.totalTopDaysSum += item.termOfPaymentDays || 0;
+                return acc;
+            }, { totalPriceSum: 0, totalQtySum: 0, totalReceiptSum: 0, totalTopDaysSum: 0 });
+
+            const finalResponse = {
+                productInfo: {
+                    name: rows[0].ProductName,
+                    supplier: rows[0].SupplierName
+                },
+                summary: {
+                    averagePrice: sums.totalPriceSum / totalRecords,
+                    averageQty: sums.totalQtySum / totalRecords,
+                    averageReceipt: sums.totalReceiptSum / totalRecords,
+                    averageTopDays: sums.totalTopDaysSum / totalRecords,
+                    currency: rows[0].Currency || 'N/A'
+                },
+                priceHistory: priceHistory
+            };
+
+            return finalResponse;
+
+        } catch (error) {
+            console.error('Error in getPurchaseOrders:', error);
+            return [];
+        } finally {
+            if (dbClient) {
+                await dbClient.release();
+            }
+        }
+    }
+
+
 }
 
 async function requisition(fastify, opts) {
