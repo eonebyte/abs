@@ -291,7 +291,7 @@ class Requisition {
                     FROM ad_wf_activity wfa
                     JOIN ad_user au ON wfa.ad_user_id = au.ad_user_id
                     WHERE wfa.ad_wf_node_id > 1000000
-                    AND wfa.wfstate = 'CC'
+                    AND wfa.wfstate = 'CC' AND wfa.ad_table_id = 702 -- requisition
                     ORDER BY wfa.record_id, au.ad_user_id, wfa.created ASC
                 ),
                 ranked_approvers AS (

@@ -812,7 +812,7 @@ class Order {
                         wfa.ad_wf_activity_uu AS barcode
                     FROM ad_wf_activity wfa
                     JOIN ad_user au ON wfa.ad_user_id = au.ad_user_id
-                    WHERE wfa.ad_wf_node_id > 1000000
+                    WHERE wfa.ad_wf_node_id > 1000000 AND wfa.ad_table_id=259 --order
                     AND wfa.wfstate = 'CC'
                     ORDER BY wfa.record_id, au.ad_user_id, wfa.created ASC
                 ),
