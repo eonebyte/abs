@@ -38,4 +38,6 @@ export default async function priceHistoryDetail(server, opts) {
             reply.status(500).send(error.message);
         }
     });
+
+    
 }

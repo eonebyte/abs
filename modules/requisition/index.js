@@ -1,7 +1,10 @@
 import fp from 'fastify-plugin'
 import autoload from '@fastify/autoload'
 import { join } from 'desm'
+import https from 'https';
+import axios from 'axios';
 
+const baseUrlIdempiere = process.env.BASE_URL_IDEMPIERE;
 
 class Requisition {
 
@@ -726,6 +729,197 @@ class Requisition {
         } finally {
             if (dbClient) {
                 await dbClient.release();
+            }
+        }
+    }
+
+    async getFilteredRequisition(server, payload, bearerToken) {
+        let dbClient;
+
+        try {
+            const agent = new https.Agent({ rejectUnauthorized: false });
+
+            // 1. Validasi Token
+            if (!bearerToken) {
+                throw { statusCode: 401, message: "Missing Bearer Token" };
+            }
+
+            // 2. Validasi Parameter Wajib (ad_user_id)
+            // Cek di awal agar kode di bawah aman menggunakan variable ad_user_id
+            if (!payload || !payload.ad_user_id) {
+                throw { statusCode: 400, message: "Parameter ad_user_id wajib diisi" };
+            }
+
+            // Destructure payload
+            const { ad_user_id, m_warehouse_id, ad_role_id, priority, createdby, docstatus } = payload;
+
+            // 3. Cek apakah ada filter TAMBAHAN selain ad_user_id
+            // Kita cek apakah properti filter lain memiliki nilai (truthy)
+            const hasExtraFilters = m_warehouse_id || ad_role_id || priority || createdby || docstatus;
+
+            // ============================================================
+            // KONDISI 1: HANYA AD_USER_ID (Tanpa Filter Lain)
+            // Endpoint: .../filter?ad_user_id=1000069
+            // Action: Langsung return workflow full dari Axios
+            // ============================================================
+            if (!hasExtraFilters) {
+                const res = await axios.get(
+                    `${baseUrlIdempiere}/api/v1/workflow/${ad_user_id}`,
+                    {
+                        headers: {
+                            Authorization: `Bearer ${bearerToken}`
+                        },
+                        httpsAgent: agent
+                    }
+                );
+
+                // Return sesuai struktur yang diminta
+                return {
+                    workflow: res.data.nodes
+                };
+            }
+
+            // ============================================================
+            // KONDISI 2: ADA FILTER TAMBAHAN
+            // Endpoint: .../filter?ad_user_id=...&ad_role_id=...
+            // Action: Connect DB -> Filter SQL -> Filter Workflow -> Return Object
+            // ============================================================
+
+            // Baru connect DB di sini (Lazy connection)
+            dbClient = await server.pg.connect();
+
+            const whereClauses = [];
+            const values = [];
+
+            // --- FILTER SQL BUILDER ---
+
+            // Filter by Warehouse
+            if (m_warehouse_id) {
+                values.push(m_warehouse_id);
+                whereClauses.push(`mr.m_warehouse_id = $${values.length}`);
+            }
+
+            // Filter by Priority
+            if (priority) {
+                values.push(priority);
+                whereClauses.push(`mr.priorityrule = $${values.length}`);
+            }
+
+            // Filter By CreatedBy
+            if (createdby) {
+                values.push(createdby);
+                whereClauses.push(`mr.createdby = $${values.length}`);
+            }
+
+            // Filter By DocStatus
+            if (docstatus) {
+                values.push(docstatus);
+                whereClauses.push(`mr.docstatus = $${values.length}`);
+            }
+
+            // Filter by Role -> get list of user_ids that belong to role id
+            if (ad_role_id) {
+                const roleUsersQuery = `
+                SELECT aur.ad_user_id
+                FROM ad_user au
+                JOIN ad_user_roles aur ON au.ad_user_id = aur.ad_user_id 
+                WHERE au.ad_client_id IN (1000000, 1000003)
+                AND au.name NOT ILIKE '%admin%'
+                AND au.name NOT ILIKE '%user%'
+                AND aur.ad_role_id = $1
+            `;
+                const resultRole = await dbClient.query(roleUsersQuery, [ad_role_id]);
+                const userIds = resultRole.rows.map(r => parseInt(r.ad_user_id));
+
+                console.log('roles : ', userIds);
+
+
+                if (userIds.length > 0) {
+                    // Buat placeholder dinamis ($2, $3, dst)
+                    const placeholders = userIds.map((_, i) => `$${values.length + i + 1}`).join(", ");
+                    whereClauses.push(`mr.createdby IN (${placeholders})`);
+                    values.push(...userIds);
+
+                    console.log('values : ', values);
+                    
+                } else {
+                    // User dengan role tersebut tidak ditemukan, hasil pasti kosong
+                    return { requisitions: [], workflow: {} };
+                }
+            }
+
+            // Susun query final
+            const finalWhere = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : '';
+
+            const query = `
+            SELECT 
+                mr.m_requisition_id,
+                mr.documentno,
+                mr.priorityrule,
+                mr.m_warehouse_id,
+                mr.createdby,
+                mr.created,
+                mr.updated
+            FROM M_Requisition mr
+            ${finalWhere}
+            ORDER BY mr.created DESC
+            LIMIT 200;
+        `;
+
+            const result = await dbClient.query(query, values);
+
+            const requisitions = result.rows.map(row => ({
+                ...row,
+                m_requisition_id: parseInt(row.m_requisition_id, 10)
+            }));
+
+            console.log('requisition : ', requisitions);
+            
+
+            // --- AXIOS CALL ---
+            // Ambil semua workflow aktif dari user
+            const res = await axios.get(
+                `${baseUrlIdempiere}/api/v1/workflow/${ad_user_id}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${bearerToken}`
+                    },
+                    httpsAgent: agent
+                }
+            );
+
+            // --- FILTERING NODES (JS) ---
+            const reqIds = requisitions.map(r => r.m_requisition_id);
+
+            const filteredWorkflow = {
+                ...res.data,
+                // Filter nodes agar hanya menampilkan yang record_id-nya ada di hasil query DB
+                nodes: res.data.nodes?.filter(node => reqIds.includes(parseInt(node.record_id))) || []
+            };
+
+            return {
+                // requisitions, // Opsional jika ingin ditampilkan
+                workflow: filteredWorkflow.nodes
+            };
+
+        } catch (error) {
+            // Error handling dari response Axios
+            if (error.response) {
+                throw {
+                    statusCode: error.response.status,
+                    message: error.response.status == 401 ? "Unauthorized access" : (error.response.data?.message || "External API Error")
+                };
+            }
+
+            // Error handling umum
+            throw {
+                statusCode: error.statusCode || 500,
+                message: "server error: " + (error.message || error)
+            };
+        } finally {
+            // Wajib release koneksi DB
+            if (dbClient) {
+                dbClient.release();
             }
         }
     }
