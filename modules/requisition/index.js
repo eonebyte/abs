@@ -613,6 +613,123 @@ class Requisition {
     }
 
 
+    async getWarehouse(server) {
+        let dbClient
+        try {
+            dbClient = await server.pg.connect();
+
+            const query = `
+            SELECT wh.m_warehouse_id, wh."name"  
+            FROM m_warehouse wh WHERE wh.ad_client_id IN (1000000, 1000003)`
+
+            const result = await dbClient.query(query);
+
+            return result.rows.map(row => ({
+                m_warehouse_id: parseInt(row.m_warehouse_id),
+                name: row.name
+            }));
+
+
+        } catch (error) {
+            console.error('Error in getWarehouse:', error);
+            return [];
+        } finally {
+            if (dbClient) {
+                await dbClient.release();
+            }
+        }
+    }
+
+    async getRole(server) {
+        let dbClient
+        try {
+            dbClient = await server.pg.connect();
+
+            const query = `
+            SELECT ad_role_id, name FROM AD_Role 
+            WHERE ismasterrole = 'N' AND ad_client_id IN (1000000, 1000003) 
+            AND name NOT ILIKE '%admin%'
+            AND name NOT ILIKE '%user%'`
+
+            const result = await dbClient.query(query);
+
+            return result.rows.map(row => ({
+                ad_role_id: parseInt(row.ad_role_id),
+                name: row.name
+            }));
+
+
+        } catch (error) {
+            console.error('Error in getWarehouse:', error);
+            return [];
+        } finally {
+            if (dbClient) {
+                await dbClient.release();
+            }
+        }
+    }
+
+    async getPriorityRule(server) {
+        let dbClient
+        try {
+            dbClient = await server.pg.connect();
+
+            const query = `
+            SELECT value, name, description FROM AD_Ref_List WHERE ad_reference_id=154 AND ad_client_id = 0 ORDER BY value`
+
+            const result = await dbClient.query(query);
+
+            return result.rows.map(row => ({
+                value: row.value,
+                name: row.name,
+                description: row.description
+            }));
+
+
+        } catch (error) {
+            console.error('Error in getWarehouse:', error);
+            return [];
+        } finally {
+            if (dbClient) {
+                await dbClient.release();
+            }
+        }
+    }
+
+    async getCreatedBy(server) {
+        let dbClient
+        try {
+            dbClient = await server.pg.connect();
+
+            const query = `
+            SELECT DISTINCT u.ad_user_id, u.value, u.name
+            FROM ad_user u
+            JOIN ad_user_roles ur ON ur.ad_user_id = u.ad_user_id
+            JOIN ad_role r ON r.ad_role_id = ur.ad_role_id
+            WHERE u.name NOT ILIKE '%admin%'
+            AND u.name NOT ILIKE '%user%'
+            AND u.name NOT ILIKE '%system%'
+            AND u.name NOT ILIKE '%web%'`
+
+            const result = await dbClient.query(query);
+
+            return result.rows.map(row => ({
+                ad_user_id: parseInt(row.ad_user_id),
+                // value: row.value,
+                name: row.name
+            }));
+
+
+        } catch (error) {
+            console.error('Error in getWarehouse:', error);
+            return [];
+        } finally {
+            if (dbClient) {
+                await dbClient.release();
+            }
+        }
+    }
+
 }
 
 async function requisition(fastify, opts) {
