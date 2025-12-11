@@ -1719,25 +1719,25 @@ class Order {
             // Filter by Warehouse
             if (m_warehouse_id) {
                 values.push(m_warehouse_id);
-                whereClauses.push(`mr.m_warehouse_id = $${values.length}`);
+                whereClauses.push(`co.m_warehouse_id = $${values.length}`);
             }
 
             // Filter by Priority
             if (priority) {
                 values.push(priority);
-                whereClauses.push(`mr.priorityrule = $${values.length}`);
+                whereClauses.push(`co.priorityrule = $${values.length}`);
             }
 
             // Filter By CreatedBy
             if (createdby) {
                 values.push(createdby);
-                whereClauses.push(`mr.createdby = $${values.length}`);
+                whereClauses.push(`co.createdby = $${values.length}`);
             }
 
             // Filter By DocStatus
             if (docstatus) {
                 values.push(docstatus);
-                whereClauses.push(`mr.docstatus = $${values.length}`);
+                whereClauses.push(`co.docstatus = $${values.length}`);
             }
 
             // Filter by Role -> get list of user_ids that belong to role id
@@ -1760,7 +1760,7 @@ class Order {
                 if (userIds.length > 0) {
                     // Buat placeholder dinamis ($2, $3, dst)
                     const placeholders = userIds.map((_, i) => `$${values.length + i + 1}`).join(", ");
-                    whereClauses.push(`mr.createdby IN (${placeholders})`);
+                    whereClauses.push(`co.createdby IN (${placeholders})`);
                     values.push(...userIds);
 
                     console.log('values : ', values);
