@@ -210,7 +210,7 @@ class Requisition {
     }
   }
 
-  async getPurchaseRevHistories(server, userId, page, pageSize) {
+  async getPurchaseRevHistories(server, userId, page, pageSize, documentNo) {
     let dbClient;
     try {
       dbClient = await server.pg.connect();
@@ -227,6 +227,7 @@ class Requisition {
                 WHERE
                     wfa.ad_table_id=702 AND wfa.wfstate = 'CA'
                     AND wfa.ad_user_id = $1
+                    AND ($4::text IS NULL OR mr.documentno ILIKE '%' || $4::text || '%')
                 ORDER BY wfa.created DESC
                 LIMIT $2 OFFSET $3`;
 
@@ -241,7 +242,7 @@ class Requisition {
             `;
 
       const [result, totalCountResult] = await Promise.all([
-        dbClient.query(query, [userId, pageSize, offset]),
+        dbClient.query(query, [userId, pageSize, offset, documentNo]),
         dbClient.query(totalCountQuery, [userId]),
       ]);
 
