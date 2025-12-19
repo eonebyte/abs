@@ -110,7 +110,7 @@ class Requisition {
     }
   }
 
-  async getPurchaseDone(server) {
+  async getPurchaseDone(server, documentNo) {
     let dbClient;
     try {
       dbClient = await server.pg.connect();
@@ -172,9 +172,11 @@ class Requisition {
                     AND mr.docstatus IN ('CO')
                     AND fa.preparedby IS NOT NULL
                     AND fa.legalizedby IS NOT NULL
-                    AND  fa.approvedby IS NOT NULL`;
+                    AND  fa.approvedby IS NOT NULL
+                    AND ($1::text IS NULL OR mr.documentno ILIKE '%' || $1::text || '%')
+                    `;
 
-      const result = await dbClient.query(query);
+      const result = await dbClient.query(query, [documentNo]);
 
       return {
         success: true,
