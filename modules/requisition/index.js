@@ -70,7 +70,10 @@ class Requisition {
                     AND fa.preparedby IS NOT NULL
                     AND fa.legalizedby IS NOT NULL
                     AND  fa.legalizedbyid = $1
-                    AND ($2 IS NULL OR mr.documentno ILIKE '%' || $2 || '%')
+                    AND (
+                        $2::text IS NULL
+                        OR mr.documentno ILIKE '%' || $2::text || '%'
+                    )
                     `;
 
       const result = await dbClient.query(query, [userId, documentNo]);
