@@ -4,7 +4,7 @@ export default async function purchaseRequisitionDone(fastify, opts) {
       const { documentNo } = request.query;
       const purchaseOrders = await fastify.requisition.getPurchaseDone(
         fastify,
-        dodocumentNo,
+        documentNo,
       );
       reply.send(purchaseOrders);
     } catch (error) {
