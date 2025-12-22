@@ -7,76 +7,137 @@ import axios from "axios";
 const baseUrlIdempiere = process.env.BASE_URL_IDEMPIERE;
 
 class Requisition {
-  async getPurchaseOnProgress(server, userId, documentNo) {
+  async getPurchaseOnProgress(server, payload) {
     let dbClient;
     try {
       dbClient = await server.pg.connect();
 
+      const {
+        userId, // Ini adalah legalizedByid yang wajib
+        documentNo,
+        m_warehouse_id,
+        priority,
+        createdby,
+        docstatus,
+        ad_role_id
+      } = payload;
+
+      if (!userId) {
+        throw new Error("Parameter userId (legalizedByid) wajib diisi");
+      }
+
+      // 1. Inisialisasi Clauses untuk Filter Dinamis
+      // Filter dasar: client, org, dan legalizedByid (sesuai logic awal Anda)
+      const whereClauses = [
+        `mr.ad_client_id = 1000003`,
+        `mr.ad_org_id = 1000003`,
+        `fa.legalizedbyid = $1`
+      ];
+      const values = [userId];
+
+      // 2. Tambahkan Filter Dinamis
+      if (documentNo) {
+        values.push(`%${documentNo}%`);
+        whereClauses.push(`mr.documentno ILIKE $${values.length}`);
+      }
+
+      if (m_warehouse_id) {
+        values.push(m_warehouse_id);
+        whereClauses.push(`mr.m_warehouse_id = $${values.length}`);
+      }
+
+      if (priority) {
+        values.push(priority);
+        whereClauses.push(`mr.priorityrule = $${values.length}`);
+      }
+
+      if (createdby) {
+        values.push(createdby);
+        whereClauses.push(`mr.createdby = $${values.length}`);
+      }
+
+      // Status default 'IP' jika tidak ditentukan
+      if (docstatus) {
+        values.push(docstatus);
+        whereClauses.push(`mr.docstatus = $${values.length}`);
+      } else {
+        whereClauses.push(`mr.docstatus = 'IP'`);
+      }
+
+      // Filter by Role (Mencari user yang memiliki role tertentu)
+      if (ad_role_id) {
+        const roleUsersQuery = `
+                SELECT aur.ad_user_id
+                FROM ad_user_roles aur
+                WHERE aur.ad_role_id = $1
+            `;
+        const resultRole = await dbClient.query(roleUsersQuery, [ad_role_id]);
+        const userIds = resultRole.rows.map((r) => parseInt(r.ad_user_id));
+
+        if (userIds.length > 0) {
+          const placeholders = userIds.map((_, i) => `$${values.length + i + 1}`).join(", ");
+          whereClauses.push(`mr.createdby IN (${placeholders})`);
+          values.push(...userIds);
+        } else {
+          // Jika role diisi tapi tidak ada usernya, langsung return kosong
+          return { success: true, message: "No data found for this role", meta: { count: 0 }, data: [] };
+        }
+      }
+
+      const finalWhere = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+      // 3. Query Utama dengan CTE
       const query = `
-                WITH wf_activities AS (
-                SELECT DISTINCT ON (wfa.record_id, au.ad_user_id)wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
+            WITH wf_activities AS (
+                SELECT DISTINCT ON (wfa.record_id, au.ad_user_id) wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
                 FROM ad_wf_activity wfa
                 JOIN ad_user au ON wfa.ad_user_id = au.ad_user_id
-                WHERE wfa.ad_wf_node_id > 1000000 AND wfa.wfstate = 'CC' AND wfa.ad_table_id = 702 -- requisition
+                WHERE wfa.ad_wf_node_id > 1000000 AND wfa.wfstate = 'CC' AND wfa.ad_table_id = 702
                 ORDER BY wfa.record_id, au.ad_user_id, wfa.created ASC
-                ),
-                ranked_approvers AS (
+            ),
+            ranked_approvers AS (
                 SELECT record_id, user_name, ad_user_id,
                     ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY created) AS nourut
                 FROM wf_activities
-                ),
-                latest_process AS (
-                SELECT DISTINCT ON (record_id)
-                    ad_wf_process_id, record_id
+            ),
+            latest_process AS (
+                SELECT DISTINCT ON (record_id) ad_wf_process_id, record_id
                 FROM ad_wf_process
                 ORDER BY record_id, created DESC
-                ),
-                has_aborted AS (
+            ),
+            has_aborted AS (
                 SELECT lp.record_id,
                     COUNT(*) FILTER (WHERE awa.wfstate = 'CA' AND awa.ad_wf_node_id > 1000000) > 0 AS aborted
                 FROM latest_process lp
                 JOIN ad_wf_activity awa ON awa.ad_wf_process_id = lp.ad_wf_process_id
                 GROUP BY lp.record_id
-                ),
-                final_approvers AS (
+            ),
+            final_approvers AS (
                 SELECT
                     r.record_id,
                     MAX(CASE WHEN r.nourut = 1 THEN r.user_name END) AS preparedby,
-                     MAX(CASE WHEN r.nourut = 1 THEN r.ad_user_id END) AS preparedbyid,
-                    MAX(CASE
-                        WHEN h.aborted THEN NULL
-                        WHEN r.nourut = 2 THEN r.user_name
-                        END) AS legalizedby,
-                    MAX(CASE
-                        WHEN h.aborted THEN NULL
-                        WHEN r.nourut = 2 THEN r.ad_user_id
-                        END) AS legalizedbyid,
+                    MAX(CASE WHEN r.nourut = 1 THEN r.ad_user_id END) AS preparedbyid,
+                    MAX(CASE WHEN h.aborted THEN NULL WHEN r.nourut = 2 THEN r.user_name END) AS legalizedby,
+                    MAX(CASE WHEN h.aborted THEN NULL WHEN r.nourut = 2 THEN r.ad_user_id END) AS legalizedbyid,
                     MAX(CASE WHEN r.nourut = 3 THEN r.user_name END) AS approvedby,
-                     MAX(CASE WHEN r.nourut = 3 THEN r.ad_user_id END) AS approvedbyid
+                    MAX(CASE WHEN r.nourut = 3 THEN r.ad_user_id END) AS approvedbyid
                 FROM ranked_approvers r
                 LEFT JOIN has_aborted h ON h.record_id = r.record_id
                 GROUP BY r.record_id, h.aborted
-                )
-                SELECT
+            )
+            SELECT
                 mr.m_requisition_id, mr.documentno, mr.description,
                 mr.datedoc, mr.docstatus, fa.preparedby, fa.legalizedby, fa.approvedby,
                 fa.preparedbyid, fa.legalizedbyid, fa.approvedbyid
-                FROM M_Requisition mr
-                LEFT JOIN final_approvers fa ON fa.record_id = mr.m_requisition_id
-                WHERE
-                    mr.ad_client_id = 1000003
-                    AND mr.ad_org_id = 1000003
-                    AND mr.docstatus IN ('IP')
-                    AND fa.preparedby IS NOT NULL
-                    AND fa.legalizedby IS NOT NULL
-                    AND  fa.legalizedbyid = $1
-                    AND (
-                        $2::text IS NULL
-                        OR mr.documentno ILIKE '%' || $2::text || '%'
-                    )
-                    `;
+            FROM M_Requisition mr
+            LEFT JOIN final_approvers fa ON fa.record_id = mr.m_requisition_id
+            ${finalWhere}
+            AND fa.preparedby IS NOT NULL
+            AND fa.legalizedby IS NOT NULL
+            ORDER BY mr.created DESC
+        `;
 
-      const result = await dbClient.query(query, [userId, documentNo]);
+      const result = await dbClient.query(query, values);
 
       return {
         success: true,
@@ -86,9 +147,6 @@ class Requisition {
           record_id: Number(row.m_requisition_id),
           documentNo: row.documentno,
           description: row.description,
-          plant: row.plant,
-          vendor: row.vendor,
-          dateOrdered: row.dateordered,
           docStatus: row.docstatus,
           preparedBy: row.preparedby,
           legalizedBy: row.legalizedby,
@@ -99,14 +157,12 @@ class Requisition {
       server.log.error(error);
       return {
         success: false,
-        message: "Failed to fetch purchase orders workflow on progress",
+        message: "Failed to fetch purchase orders",
         errors: [error.message],
         data: [],
       };
     } finally {
-      if (dbClient) {
-        await dbClient.release();
-      }
+      if (dbClient) await dbClient.release();
     }
   }
 
