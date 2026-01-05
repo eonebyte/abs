@@ -166,10 +166,82 @@ class Requisition {
     }
   }
 
-  async getPurchaseDone(server, documentNo) {
+  async getPurchaseDone(server, payload) {
     let dbClient;
     try {
       dbClient = await server.pg.connect();
+
+      const {
+        documentNo,
+        m_warehouse_id,
+        priority,
+        createdby,
+        docstatus,
+        ad_role_id
+      } = payload;
+
+      // 1. Inisialisasi Clauses untuk Filter Dinamis
+      // Filter dasar: client, org, dan legalizedByid (sesuai logic awal Anda)
+      const whereClauses = [
+        `mr.ad_client_id = 1000003`,
+        `mr.ad_org_id = 1000003`,
+        `fa.preparedby IS NOT NULL`,
+        `fa.legalizedby IS NOT NULL`,
+        `fa.approvedby IS NOT NULL`
+      ];
+
+      const values = [];
+
+      // 2. Tambahkan Filter Dinamis
+      if (documentNo) {
+        values.push(`%${documentNo}%`);
+        whereClauses.push(`mr.documentno ILIKE $${values.length}`);
+      }
+
+      if (m_warehouse_id) {
+        values.push(m_warehouse_id);
+        whereClauses.push(`mr.m_warehouse_id = $${values.length}`);
+      }
+
+      if (priority) {
+        values.push(priority);
+        whereClauses.push(`mr.priorityrule = $${values.length}`);
+      }
+
+      if (createdby) {
+        values.push(createdby);
+        whereClauses.push(`mr.createdby = $${values.length}`);
+      }
+
+      // Status default 'IP' jika tidak ditentukan
+      if (docstatus) {
+        values.push(docstatus);
+        whereClauses.push(`mr.docstatus = $${values.length}`);
+      } else {
+        whereClauses.push(`mr.docstatus = 'CO'`);
+      }
+
+      // Filter by Role (Mencari user yang memiliki role tertentu)
+      if (ad_role_id) {
+        const roleUsersQuery = `
+                SELECT aur.ad_user_id
+                FROM ad_user_roles aur
+                WHERE aur.ad_role_id = $1
+            `;
+        const resultRole = await dbClient.query(roleUsersQuery, [ad_role_id]);
+        const userIds = resultRole.rows.map((r) => parseInt(r.ad_user_id));
+
+        if (userIds.length > 0) {
+          const placeholders = userIds.map((_, i) => `$${values.length + i + 1}`).join(", ");
+          whereClauses.push(`mr.createdby IN (${placeholders})`);
+          values.push(...userIds);
+        } else {
+          // Jika role diisi tapi tidak ada usernya, langsung return kosong
+          return { success: true, message: "No data found for this role", meta: { count: 0 }, data: [] };
+        }
+      }
+
+      const finalWhereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
       const query = `
                 WITH wf_activities AS (
@@ -222,17 +294,10 @@ class Requisition {
                 fa.preparedbyid, fa.legalizedbyid, fa.approvedbyid
                 FROM M_Requisition mr
                 LEFT JOIN final_approvers fa ON fa.record_id = mr.m_requisition_id
-                WHERE
-                    mr.ad_client_id = 1000003
-                    AND mr.ad_org_id = 1000003
-                    AND mr.docstatus IN ('CO')
-                    AND fa.preparedby IS NOT NULL
-                    AND fa.legalizedby IS NOT NULL
-                    AND  fa.approvedby IS NOT NULL
-                    AND ($1::text IS NULL OR mr.documentno ILIKE '%' || $1::text || '%')
+                ${finalWhereString}
                     `;
 
-      const result = await dbClient.query(query, [documentNo]);
+      const result = await dbClient.query(query, values);
 
       return {
         success: true,

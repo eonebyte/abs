@@ -1,10 +1,10 @@
 export default async function purchaseRequisitionDone(fastify, opts) {
   fastify.get("/done", async (request, reply) => {
     try {
-      const { documentNo } = request.query;
+      // const { documentNo } = request.query;
       const purchaseOrders = await fastify.requisition.getPurchaseDone(
         fastify,
-        documentNo,
+        request.query
       );
       reply.send(purchaseOrders);
     } catch (error) {
