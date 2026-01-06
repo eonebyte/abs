@@ -331,72 +331,121 @@ class Requisition {
     }
   }
 
-  async getPurchaseRevHistories(server, userId, page, pageSize, documentNo) {
+  async getPurchaseRevHistories(server, page, pageSize, payload) {
     let dbClient;
     try {
       dbClient = await server.pg.connect();
 
+      const { userId, documentNo, m_warehouse_id, ad_role_id, priority, createdby } = payload;
       const offset = (page - 1) * pageSize;
 
-      const query = `
-                SELECT
-                    wfa.record_id,
-                    wfa.created, mr.documentno,
-                    regexp_replace(wfa.textmsg, '^IsApproved=N - ', '') AS textmsg
-                FROM AD_WF_Activity wfa
-                JOIN m_requisition mr ON mr.m_requisition_id = wfa.record_id
-                WHERE
-                    wfa.ad_table_id=702 AND wfa.wfstate = 'CA'
-                    AND wfa.ad_user_id = $1
-                    AND ($4::text IS NULL OR mr.documentno ILIKE '%' || $4::text || '%')
-                ORDER BY wfa.created DESC
-                LIMIT $2 OFFSET $3`;
+      // 1. Inisialisasi Query Dasar & Parameter
+      // Kita masukkan userId sebagai parameter pertama ($1)
+      let values = [userId];
+      let whereClauses = [
+        "wfa.ad_user_id = $1",
+        "wfa.ad_table_id = 702",
+        "wfa.wfstate = 'CA'"
+      ];
 
+      // 2. Filter Dinamis (Mulai dari $2 dan seterusnya)
+      if (documentNo) {
+        values.push(`%${documentNo}%`);
+        whereClauses.push(`mr.documentno ILIKE $${values.length}`);
+      }
+
+      if (m_warehouse_id) {
+        values.push(m_warehouse_id);
+        whereClauses.push(`mr.m_warehouse_id = $${values.length}`);
+      }
+
+      if (priority) {
+        values.push(priority);
+        whereClauses.push(`mr.priorityrule = $${values.length}`);
+      }
+
+      if (createdby) {
+        values.push(createdby);
+        whereClauses.push(`mr.createdby = $${values.length}`);
+      }
+
+      // Filter by Role
+      if (ad_role_id) {
+        const roleUsersQuery = `SELECT ad_user_id FROM ad_user_roles WHERE ad_role_id = $1`;
+        const resultRole = await dbClient.query(roleUsersQuery, [ad_role_id]);
+        const userIds = resultRole.rows.map((r) => parseInt(r.ad_user_id));
+
+        if (userIds.length > 0) {
+          const placeholders = userIds.map((_, i) => `$${values.length + i + 1}`).join(", ");
+          whereClauses.push(`mr.createdby IN (${placeholders})`);
+          values.push(...userIds);
+        } else {
+          return { success: true, message: "No data found for this role", meta: { count: 0 }, data: [] };
+        }
+      }
+
+      const finalWhereString = `WHERE ${whereClauses.join(" AND ")}`;
+
+      // 3. Query Total Count (Harus pakai WHERE yang sama agar pagination sinkron)
       const totalCountQuery = `
-                SELECT
-                        COUNT(*)
-                    FROM AD_WF_Activity wfa
-                    JOIN m_requisition mr ON mr.m_requisition_id = wfa.record_id
-                    WHERE
-                        wfa.ad_table_id=702 AND wfa.wfstate = 'CA'
-                        AND wfa.ad_user_id = $1
-            `;
+            SELECT COUNT(*) 
+            FROM AD_WF_Activity wfa
+            JOIN m_requisition mr ON mr.m_requisition_id = wfa.record_id
+            ${finalWhereString}
+        `;
 
+      // 4. Query Data
+      // Tambahkan limit dan offset di akhir array values
+      const dataValues = [...values];
+      dataValues.push(pageSize);
+      const limitIdx = dataValues.length;
+      dataValues.push(offset);
+      const offsetIdx = dataValues.length;
+
+      const dataQuery = `
+            SELECT
+                wfa.record_id,
+                wfa.created, 
+                mr.documentno,
+                regexp_replace(wfa.textmsg, '^IsApproved=N - ', '') AS textmsg
+            FROM AD_WF_Activity wfa
+            JOIN m_requisition mr ON mr.m_requisition_id = wfa.record_id
+            ${finalWhereString}
+            ORDER BY wfa.created DESC
+            LIMIT $${limitIdx} OFFSET $${offsetIdx}
+        `;
+
+      // Jalankan Query
       const [result, totalCountResult] = await Promise.all([
-        dbClient.query(query, [userId, pageSize, offset, documentNo]),
-        dbClient.query(totalCountQuery, [userId]),
+        dbClient.query(dataQuery, dataValues),
+        dbClient.query(totalCountQuery, values),
       ]);
 
       const totalCount = parseInt(totalCountResult.rows[0].count, 10);
 
-      if (result.rows.length === 0) {
-        return {
-          success: false,
-          message: `Rev History not found`,
-          meta: { count: 0 },
-          data: [],
-        };
-      }
-
       return {
         success: true,
-        message: "Rev History fetched successfully",
+        message: result.rows.length > 0 ? "Rev History fetched successfully" : "Rev History not found",
         meta: {
           total: totalCount,
-          count: result.rowCount,
+          count: result.rows.length,
           per_page: pageSize,
           current_page: page,
           total_pages: Math.ceil(totalCount / pageSize),
         },
         data: result.rows,
       };
+
     } catch (error) {
       console.error("Error in Rev History:", error);
-      return [];
+      return {
+        success: false,
+        message: "Internal Server Error",
+        meta: { count: 0 },
+        data: []
+      };
     } finally {
-      if (dbClient) {
-        await dbClient.release();
-      }
+      if (dbClient) await dbClient.release();
     }
   }
 
