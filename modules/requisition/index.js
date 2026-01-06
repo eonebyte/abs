@@ -906,6 +906,33 @@ class Requisition {
     }
   }
 
+  async getBPartner(server) {
+    let dbClient;
+    try {
+      dbClient = await server.pg.connect();
+
+      const query = `
+            SELECT cb.c_bpartner_id, cb."name" FROM c_bpartner cb 
+          WHERE 
+          		cb.isactive = 'Y' AND cb.ad_client_id = 1000003
+          		AND cb.isvendor = 'Y'`;
+
+      const result = await dbClient.query(query);
+
+      return result.rows.map((row) => ({
+        c_bpartner_id: parseInt(row.c_bpartner_id),
+        name: row.name,
+      }));
+    } catch (error) {
+      console.error("Error in getWarehouse:", error);
+      return [];
+    } finally {
+      if (dbClient) {
+        await dbClient.release();
+      }
+    }
+  }
+
   async getFilteredRequisition(server, payload, bearerToken) {
     let dbClient;
 

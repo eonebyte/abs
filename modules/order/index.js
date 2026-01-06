@@ -1674,12 +1674,11 @@ class Order {
             }
 
             // Destructure payload
-            const { ad_user_id, m_warehouse_id, ad_role_id, priority, createdby, docstatus } = payload;
+            const { ad_user_id, m_warehouse_id, ad_role_id, priority, createdby, docstatus, c_bpartner_id } = payload;
 
             // 3. Cek apakah ada filter TAMBAHAN selain ad_user_id
             // Kita cek apakah properti filter lain memiliki nilai (truthy)
-            const hasExtraFilters = m_warehouse_id || ad_role_id || priority || createdby || docstatus;
-
+            const hasExtraFilters = m_warehouse_id || ad_role_id || priority || createdby || docstatus || c_bpartner_id;
             // ============================================================
             // KONDISI 1: HANYA AD_USER_ID (Tanpa Filter Lain)
             // Endpoint: .../filter?ad_user_id=1000069
@@ -1715,6 +1714,12 @@ class Order {
             const values = [];
 
             // --- FILTER SQL BUILDER ---
+
+            // Filter by Bpartner
+            if (c_bpartner_id) {
+                values.push(c_bpartner_id);
+                whereClauses.push(`co.c_bpartner_id = $${values.length}`);
+            }
 
             // Filter by Warehouse
             if (m_warehouse_id) {

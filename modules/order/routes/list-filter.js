@@ -39,5 +39,15 @@ export default async function priceHistoryDetail(server, opts) {
         }
     });
 
+    server.get('/list/bpartner', async (request, reply) => {
+        try {
+            const cd = await server.requisition.getBPartner(server);
+            reply.send(cd);
+        } catch (error) {
+            request.log.error(error);
+            reply.status(500).send(error.message);
+        }
+    });
+
     
 }
