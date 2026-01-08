@@ -620,12 +620,62 @@ class Order {
         }
     }
 
-    async getPurchaseOnProgress(server, userId, page, pageSize) {
+    async getPurchaseOnProgress(server, page, pageSize, payload) {
         let dbClient;
         try {
+
+            const { userId, m_warehouse_id, ad_role_id, priority, createdby, c_bpartner_id, documentNo } = payload;
+
             dbClient = await server.pg.connect();
 
             const offset = (page - 1) * pageSize;
+
+            let values = [];
+            let whereClauses = ["co.ad_client_id = 1000003", "co.ad_org_id = 1000003", "co.docstatus = 'IP'"];
+
+            // Filter utama berdasarkan userId
+            if (userId) {
+                values.push(userId);
+                whereClauses.push(`fa.legalizedbyid = $${values.length}`);
+            }
+
+            // 2. Filter Dinamis (Mulai dari $2 dan seterusnya)
+            if (documentNo) {
+                values.push(`%${documentNo}%`);
+                whereClauses.push(`co.documentno ILIKE $${values.length}`);
+            }
+
+            if (m_warehouse_id) {
+                values.push(m_warehouse_id);
+                whereClauses.push(`co.m_warehouse_id = $${values.length}`);
+            }
+
+            if (priority) {
+                values.push(priority);
+                whereClauses.push(`co.priorityrule = $${values.length}`);
+            }
+
+            if (createdby) {
+                values.push(createdby);
+                whereClauses.push(`co.createdby = $${values.length}`);
+            }
+
+            // Filter by Role
+            if (ad_role_id) {
+                const roleUsersQuery = `SELECT ad_user_id FROM ad_user_roles WHERE ad_role_id = $1`;
+                const resultRole = await dbClient.query(roleUsersQuery, [ad_role_id]);
+                const userIds = resultRole.rows.map((r) => parseInt(r.ad_user_id));
+
+                if (userIds.length > 0) {
+                    const placeholders = userIds.map((_, i) => `$${values.length + i + 1}`).join(", ");
+                    whereClauses.push(`co.createdby IN (${placeholders})`);
+                    values.push(...userIds);
+                } else {
+                    return { success: true, message: "No data found for this role", meta: { count: 0 }, data: [] };
+                }
+            }
+
+            const finalWhereString = `WHERE ${whereClauses.join(" AND ")}`;
 
             const query = `
                 WITH wf_activities AS (
@@ -680,15 +730,18 @@ class Order {
                 JOIN c_bpartner cb ON cb.c_bpartner_id = co.c_bpartner_id
                 JOIN c_bpartner_location cbl ON co.c_bpartner_location_id = cbl.c_bpartner_location_id
                 LEFT JOIN final_approvers fa ON fa.record_id = co.c_order_id
-                WHERE
-                    co.ad_client_id = 1000003
-                    AND co.ad_org_id = 1000003
-                    AND co.docstatus IN ('IP')
-                    AND fa.preparedby IS NOT NULL
-                    AND fa.legalizedby IS NOT NULL
-                    AND  fa.legalizedbyid = $1
+                -- WHERE
+                --     co.ad_client_id = 1000003
+                --     AND co.ad_org_id = 1000003
+                --     AND co.docstatus IN ('IP')
+                --     AND fa.preparedby IS NOT NULL
+                --     AND fa.legalizedby IS NOT NULL
+                --     AND  fa.legalizedbyid = $1
+                ${finalWhereString}
                 ORDER BY co.dateordered DESC, co.c_order_id DESC
-                LIMIT $2 OFFSET $3`;
+                -- LIMIT $2 OFFSET $3
+                LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+                `;
 
             const totalCountQuery = `
             WITH wf_activities AS (
@@ -741,13 +794,15 @@ class Order {
                 JOIN c_bpartner cb ON cb.c_bpartner_id = co.c_bpartner_id
                 JOIN c_bpartner_location cbl ON co.c_bpartner_location_id = cbl.c_bpartner_location_id
                 LEFT JOIN final_approvers fa ON fa.record_id = co.c_order_id
-                WHERE
-                    co.ad_client_id = 1000003
-                    AND co.ad_org_id = 1000003
-                    AND co.docstatus IN ('IP')
-                    AND fa.preparedby IS NOT NULL
-                    AND fa.legalizedby IS NOT NULL
-                    AND  fa.legalizedbyid = $1`;
+                -- WHERE
+                --     co.ad_client_id = 1000003
+                --     AND co.ad_org_id = 1000003
+                --     AND co.docstatus IN ('IP')
+                --     AND fa.preparedby IS NOT NULL
+                --     AND fa.legalizedby IS NOT NULL
+                --     AND  fa.legalizedbyid = $1
+                ${finalWhereString}
+                `;
 
             const [result, totalCountResult] = await Promise.all([
                 dbClient.query(query, [userId, pageSize, offset]),
