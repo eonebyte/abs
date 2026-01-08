@@ -677,6 +677,10 @@ class Order {
 
             const finalWhereString = `WHERE ${whereClauses.join(" AND ")}`;
 
+            // SIMPAN copy values untuk totalCountQuery sebelum ditambah limit/offset
+            const valuesForCount = [...values];
+
+
             const query = `
                 WITH wf_activities AS (
                 SELECT DISTINCT ON (wfa.record_id, au.ad_user_id)wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
@@ -743,6 +747,10 @@ class Order {
                 LIMIT $${values.length + 1} OFFSET $${values.length + 2}
                 `;
 
+            // Tambahkan pageSize dan offset ke array values
+            const valuesWithPagination = [...values, pageSize, offset];
+
+
             const totalCountQuery = `
             WITH wf_activities AS (
                 SELECT DISTINCT ON (wfa.record_id, au.ad_user_id)wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
@@ -805,8 +813,8 @@ class Order {
                 `;
 
             const [result, totalCountResult] = await Promise.all([
-                dbClient.query(query, [userId, pageSize, offset]),
-                dbClient.query(totalCountQuery, [userId])
+                dbClient.query(query, valuesWithPagination),
+                dbClient.query(totalCountQuery, valuesForCount)
             ]);
 
             const totalCount = parseInt(totalCountResult.rows[0].count, 10);
