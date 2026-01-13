@@ -998,76 +998,385 @@ class Order {
         }
     }
 
-    async getPurchaseDone(server, page, pageSize) {
+    // async getPurchaseDone(server, page, pageSize, payload) {
+    //     let dbClient;
+    //     try {
+    //         dbClient = await server.pg.connect();
+
+    //         const offset = (page - 1) * pageSize;
+
+    //         const {
+    //             documentNo,
+    //             m_warehouse_id,
+    //             priority,
+    //             createdby,
+    //             docstatus,
+    //             ad_role_id
+    //         } = payload;
+
+    //         const whereClauses = [
+
+    //         ];
+
+    //         const values = [];
+
+    //         // 2. Tambahkan Filter Dinamis
+    //         if (documentNo) {
+    //             values.push(`%${documentNo}%`);
+    //             whereClauses.push(`co.documentno ILIKE $${values.length}`);
+    //         }
+
+    //         if (m_warehouse_id) {
+    //             values.push(m_warehouse_id);
+    //             whereClauses.push(`co.m_warehouse_id = $${values.length}`);
+    //         }
+
+    //         if (priority) {
+    //             values.push(priority);
+    //             whereClauses.push(`co.priorityrule = $${values.length}`);
+    //         }
+
+    //         if (createdby) {
+    //             values.push(createdby);
+    //             whereClauses.push(`co.createdby = $${values.length}`);
+    //         }
+
+    //         // Status default 'IP' jika tidak ditentukan
+    //         if (docstatus) {
+    //             values.push(docstatus);
+    //             whereClauses.push(`co.docstatus = $${values.length}`);
+    //         } else {
+    //             whereClauses.push(`co.docstatus = 'CO'`);
+    //         }
+
+    //         // Filter by Role (Mencari user yang memiliki role tertentu)
+    //         if (ad_role_id) {
+    //             const roleUsersQuery = `
+    //             SELECT aur.ad_user_id
+    //             FROM ad_user_roles aur
+    //             WHERE aur.ad_role_id = $1
+    //         `;
+    //             const resultRole = await dbClient.query(roleUsersQuery, [ad_role_id]);
+    //             const userIds = resultRole.rows.map((r) => parseInt(r.ad_user_id));
+
+    //             if (userIds.length > 0) {
+    //                 const placeholders = userIds.map((_, i) => `$${values.length + i + 1}`).join(", ");
+    //                 whereClauses.push(`co.createdby IN (${placeholders})`);
+    //                 values.push(...userIds);
+    //             } else {
+    //                 // Jika role diisi tapi tidak ada usernya, langsung return kosong
+    //                 return { success: true, message: "No data found for this role", meta: { count: 0 }, data: [] };
+    //             }
+    //         }
+
+    //         const finalWhereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+    //         const query = `
+    //             WITH wf_activities AS (
+    //             SELECT DISTINCT ON (wfa.record_id, au.ad_user_id)wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
+    //             FROM ad_wf_activity wfa
+    //             JOIN ad_user au ON wfa.ad_user_id = au.ad_user_id
+    //             WHERE wfa.ad_wf_node_id > 1000000 AND wfa.wfstate = 'CC' AND wfa.ad_table_id = 259 -- purchase order
+    //             ORDER BY wfa.record_id, au.ad_user_id, wfa.created ASC
+    //             ),
+    //             ranked_approvers AS (
+    //             SELECT record_id, user_name, ad_user_id,
+    //                 ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY created) AS nourut
+    //             FROM wf_activities
+    //             ),
+    //             latest_process AS (
+    //             SELECT DISTINCT ON (record_id)
+    //                 ad_wf_process_id, record_id
+    //             FROM ad_wf_process
+    //             ORDER BY record_id, created DESC
+    //             ),
+    //             has_aborted AS (
+    //             SELECT lp.record_id,
+    //                 COUNT(*) FILTER (WHERE awa.wfstate = 'CA' AND awa.ad_wf_node_id > 1000000) > 0 AS aborted
+    //             FROM latest_process lp
+    //             JOIN ad_wf_activity awa ON awa.ad_wf_process_id = lp.ad_wf_process_id
+    //             GROUP BY lp.record_id
+    //             ),
+    //             final_approvers AS (
+    //             SELECT
+    //                 r.record_id,
+    //                 MAX(CASE WHEN r.nourut = 1 THEN r.user_name END) AS preparedby,
+    //                  MAX(CASE WHEN r.nourut = 1 THEN r.ad_user_id END) AS preparedbyid,
+    //                 MAX(CASE
+    //                     WHEN h.aborted THEN NULL
+    //                     WHEN r.nourut = 2 THEN r.user_name
+    //                     END) AS legalizedby,
+    //                 MAX(CASE
+    //                     WHEN h.aborted THEN NULL
+    //                     WHEN r.nourut = 2 THEN r.ad_user_id
+    //                     END) AS legalizedbyid,
+    //                 MAX(CASE WHEN r.nourut = 3 THEN r.user_name END) AS approvedby,
+    //                  MAX(CASE WHEN r.nourut = 3 THEN r.ad_user_id END) AS approvedbyid
+    //             FROM ranked_approvers r
+    //             LEFT JOIN has_aborted h ON h.record_id = r.record_id
+    //             GROUP BY r.record_id, h.aborted
+    //             )
+    //             SELECT
+    //             co.c_order_id, co.documentno, co.description, cbl."name" AS plant, cb."name" AS vendor,
+    //             co.dateordered, co.docstatus, fa.preparedby, fa.legalizedby, fa.approvedby,
+    //             fa.preparedbyid, fa.legalizedbyid, fa.approvedbyid
+    //             FROM C_Order co
+    //             JOIN c_bpartner cb ON cb.c_bpartner_id = co.c_bpartner_id
+    //             JOIN c_bpartner_location cbl ON co.c_bpartner_location_id = cbl.c_bpartner_location_id
+    //             LEFT JOIN final_approvers fa ON fa.record_id = co.c_order_id
+    //             WHERE
+    //                 co.ad_client_id = 1000003
+    //                 AND co.ad_org_id = 1000003
+    //                 AND co.docstatus IN ('CO')
+    //                 AND fa.preparedby IS NOT NULL
+    //                 AND fa.legalizedby IS NOT NULL
+    //                 AND  fa.approvedbyid IS NOT NULL
+    //                 ${finalWhereString}
+    //             ORDER BY co.dateordered DESC, co.c_order_id DESC
+    //             LIMIT $1 OFFSET $2`;
+
+
+    //         const totalCountQuery = `
+    //         WITH wf_activities AS (
+    //             SELECT DISTINCT ON (wfa.record_id, au.ad_user_id) wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
+    //             FROM ad_wf_activity wfa
+    //             JOIN ad_user au ON wfa.ad_user_id = au.ad_user_id
+    //             WHERE wfa.ad_wf_node_id > 1000000 AND wfa.wfstate = 'CC' AND wfa.ad_table_id = 259
+    //             ORDER BY wfa.record_id, au.ad_user_id, wfa.created ASC
+    //         ),
+    //         ranked_approvers AS (
+    //             SELECT record_id, user_name, ad_user_id,
+    //                 ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY created) AS nourut
+    //             FROM wf_activities
+    //         ),
+    //         latest_process AS (
+    //             SELECT DISTINCT ON (record_id) ad_wf_process_id, record_id
+    //             FROM ad_wf_process
+    //             ORDER BY record_id, created DESC
+    //         ),
+    //         has_aborted AS (
+    //             SELECT lp.record_id,
+    //                 COUNT(*) FILTER (WHERE awa.wfstate = 'CA' AND awa.ad_wf_node_id > 1000000) > 0 AS aborted
+    //             FROM latest_process lp
+    //             JOIN ad_wf_activity awa ON awa.ad_wf_process_id = lp.ad_wf_process_id
+    //             GROUP BY lp.record_id
+    //         ),
+    //         final_approvers AS (
+    //             SELECT
+    //                 r.record_id,
+    //                 MAX(CASE WHEN r.nourut = 1 THEN r.user_name END) AS preparedby,
+    //                 MAX(CASE WHEN r.nourut = 1 THEN r.ad_user_id END) AS preparedbyid,
+    //                 MAX(CASE WHEN h.aborted THEN NULL ELSE r.user_name END) FILTER(WHERE r.nourut = 2) AS legalizedby,
+    //                 MAX(CASE WHEN h.aborted THEN NULL ELSE r.ad_user_id END) FILTER(WHERE r.nourut = 2) AS legalizedbyid,
+    //                 MAX(CASE WHEN r.nourut = 3 THEN r.user_name END) AS approvedby,
+    //                 MAX(CASE WHEN r.nourut = 3 THEN r.ad_user_id END) AS approvedbyid
+    //             FROM ranked_approvers r
+    //             LEFT JOIN has_aborted h ON h.record_id = r.record_id
+    //             GROUP BY r.record_id, h.aborted
+    //         )
+    //         SELECT COUNT(*)
+    //         FROM C_Order co
+    //         JOIN c_bpartner cb ON cb.c_bpartner_id = co.c_bpartner_id
+    //         JOIN c_bpartner_location cbl ON co.c_bpartner_location_id = cbl.c_bpartner_location_id
+    //         LEFT JOIN final_approvers fa ON fa.record_id = co.c_order_id
+    //         WHERE
+    //             co.ad_client_id = 1000003
+    //             AND co.ad_org_id = 1000003
+    //             AND co.docstatus IN ('CO')
+    //             AND fa.preparedby IS NOT NULL
+    //             AND fa.legalizedby IS NOT NULL
+    //             AND fa.approvedbyid IS NOT NULL
+    //             ${finalWhereString}
+    //             `;
+
+    //         // Menjalankan kedua query secara bersamaan untuk efisiensi
+    //         const [result, totalCountResult] = await Promise.all([
+    //             dbClient.query(query, [pageSize, offset]),
+    //             dbClient.query(totalCountQuery)
+    //         ]);
+
+    //         const totalCount = parseInt(totalCountResult.rows[0].count, 10);
+
+
+
+    //         return {
+    //             success: true,
+    //             message: 'Purchase orders workflow on progress fetched successfully',
+    //             meta: {
+    //                 total: totalCount,
+    //                 count: result.rowCount,
+    //                 per_page: pageSize,
+    //                 current_page: page,
+    //                 total_pages: Math.ceil(totalCount / pageSize)
+    //             },
+    //             data: result.rows.map(row => ({
+    //                 id: row.c_order_id,
+    //                 documentNo: row.documentno,
+    //                 description: row.description,
+    //                 plant: row.plant,
+    //                 vendor: row.vendor,
+    //                 dateOrdered: row.dateordered,
+    //                 docStatus: row.docstatus,
+    //                 preparedBy: row.preparedby,
+    //                 legalizedBy: row.legalizedby,
+    //                 approvedBy: row.approvedby
+    //             }))
+    //         };
+    //     } catch (error) {
+    //         server.log.error(error);
+    //         return {
+    //             success: false,
+    //             message: 'Failed to fetch purchase orders workflow on progress',
+    //             errors: [error.message],
+    //             data: []
+    //         };
+    //     } finally {
+    //         if (dbClient) {
+    //             await dbClient.release();
+    //         }
+    //     }
+    // }
+
+    async getPurchaseDone(server, page, pageSize, payload) {
         let dbClient;
         try {
             dbClient = await server.pg.connect();
 
             const offset = (page - 1) * pageSize;
 
+            const {
+                documentNo,
+                m_warehouse_id,
+                priority,
+                createdby,
+                docstatus,
+                ad_role_id
+            } = payload;
+
+            // Array untuk menampung nilai parameter ($1, $2, dst)
+            const values = [];
+            // Array untuk menampung string kondisi SQL
+            const whereConditions = [];
+
+            // 1. Filter Dinamis
+            if (documentNo) {
+                values.push(`%${documentNo}%`);
+                whereConditions.push(`co.documentno ILIKE $${values.length}`);
+            }
+
+            if (m_warehouse_id) {
+                values.push(m_warehouse_id);
+                whereConditions.push(`co.m_warehouse_id = $${values.length}`);
+            }
+
+            if (priority) {
+                values.push(priority);
+                whereConditions.push(`co.priorityrule = $${values.length}`);
+            }
+
+            if (createdby) {
+                values.push(createdby);
+                whereConditions.push(`co.createdby = $${values.length}`);
+            }
+
+            // Logic DocStatus: Hapus hardcode di query utama, pindahkan ke sini sepenuhnya
+            if (docstatus) {
+                values.push(docstatus);
+                whereConditions.push(`co.docstatus = $${values.length}`);
+            } else {
+                // Default jika tidak ada parameter
+                whereConditions.push(`co.docstatus = 'CO'`);
+            }
+
+            // Filter by Role
+            if (ad_role_id) {
+                const roleUsersQuery = `
+                SELECT aur.ad_user_id
+                FROM ad_user_roles aur
+                WHERE aur.ad_role_id = $1
+            `;
+                // Gunakan query terpisah agar values utama tidak berantakan index-nya
+                const resultRole = await dbClient.query(roleUsersQuery, [ad_role_id]);
+                const userIds = resultRole.rows.map((r) => parseInt(r.ad_user_id));
+
+                if (userIds.length > 0) {
+                    // Generate placeholder dinamis ($x, $y, $z)
+                    const placeholders = userIds.map((_, i) => `$${values.length + i + 1}`).join(", ");
+                    whereConditions.push(`co.createdby IN (${placeholders})`);
+                    // Masukkan semua user ID ke array values
+                    values.push(...userIds);
+                } else {
+                    return { success: true, message: "No data found for this role", meta: { count: 0 }, data: [] };
+                }
+            }
+
+            // Gabungkan kondisi dengan " AND " (bukan WHERE, karena WHERE sudah ada di query utama)
+            const dynamicFilterString = whereConditions.length > 0 ? `AND ${whereConditions.join(" AND ")}` : "";
+
+            // Siapkan parameter untuk LIMIT dan OFFSET
+            // Index parameter LIMIT = values.length + 1
+            // Index parameter OFFSET = values.length + 2
+            const limitParamIndex = values.length + 1;
+            const offsetParamIndex = values.length + 2;
+
+            // Query Utama
+            // Perhatikan: Saya menghapus "AND co.docstatus IN ('CO')" hardcode, karena sudah dihandle di JS
             const query = `
-                WITH wf_activities AS (
-                SELECT DISTINCT ON (wfa.record_id, au.ad_user_id)wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
+            WITH wf_activities AS (
+                SELECT DISTINCT ON (wfa.record_id, au.ad_user_id) wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
                 FROM ad_wf_activity wfa
                 JOIN ad_user au ON wfa.ad_user_id = au.ad_user_id
-                WHERE wfa.ad_wf_node_id > 1000000 AND wfa.wfstate = 'CC' AND wfa.ad_table_id = 259 -- purchase order
+                WHERE wfa.ad_wf_node_id > 1000000 AND wfa.wfstate = 'CC' AND wfa.ad_table_id = 259
                 ORDER BY wfa.record_id, au.ad_user_id, wfa.created ASC
-                ),
-                ranked_approvers AS (
+            ),
+            ranked_approvers AS (
                 SELECT record_id, user_name, ad_user_id,
                     ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY created) AS nourut
                 FROM wf_activities
-                ),
-                latest_process AS (
+            ),
+            latest_process AS (
                 SELECT DISTINCT ON (record_id)
                     ad_wf_process_id, record_id
                 FROM ad_wf_process
                 ORDER BY record_id, created DESC
-                ),
-                has_aborted AS (
+            ),
+            has_aborted AS (
                 SELECT lp.record_id,
                     COUNT(*) FILTER (WHERE awa.wfstate = 'CA' AND awa.ad_wf_node_id > 1000000) > 0 AS aborted
                 FROM latest_process lp
                 JOIN ad_wf_activity awa ON awa.ad_wf_process_id = lp.ad_wf_process_id
                 GROUP BY lp.record_id
-                ),
-                final_approvers AS (
+            ),
+            final_approvers AS (
                 SELECT
                     r.record_id,
                     MAX(CASE WHEN r.nourut = 1 THEN r.user_name END) AS preparedby,
-                     MAX(CASE WHEN r.nourut = 1 THEN r.ad_user_id END) AS preparedbyid,
-                    MAX(CASE
-                        WHEN h.aborted THEN NULL
-                        WHEN r.nourut = 2 THEN r.user_name
-                        END) AS legalizedby,
-                    MAX(CASE
-                        WHEN h.aborted THEN NULL
-                        WHEN r.nourut = 2 THEN r.ad_user_id
-                        END) AS legalizedbyid,
+                    MAX(CASE WHEN r.nourut = 1 THEN r.ad_user_id END) AS preparedbyid,
+                    MAX(CASE WHEN h.aborted THEN NULL WHEN r.nourut = 2 THEN r.user_name END) AS legalizedby,
+                    MAX(CASE WHEN h.aborted THEN NULL WHEN r.nourut = 2 THEN r.ad_user_id END) AS legalizedbyid,
                     MAX(CASE WHEN r.nourut = 3 THEN r.user_name END) AS approvedby,
-                     MAX(CASE WHEN r.nourut = 3 THEN r.ad_user_id END) AS approvedbyid
+                    MAX(CASE WHEN r.nourut = 3 THEN r.ad_user_id END) AS approvedbyid
                 FROM ranked_approvers r
                 LEFT JOIN has_aborted h ON h.record_id = r.record_id
                 GROUP BY r.record_id, h.aborted
-                )
-                SELECT
+            )
+            SELECT
                 co.c_order_id, co.documentno, co.description, cbl."name" AS plant, cb."name" AS vendor,
                 co.dateordered, co.docstatus, fa.preparedby, fa.legalizedby, fa.approvedby,
                 fa.preparedbyid, fa.legalizedbyid, fa.approvedbyid
-                FROM C_Order co
-                JOIN c_bpartner cb ON cb.c_bpartner_id = co.c_bpartner_id
-                JOIN c_bpartner_location cbl ON co.c_bpartner_location_id = cbl.c_bpartner_location_id
-                LEFT JOIN final_approvers fa ON fa.record_id = co.c_order_id
-                WHERE
-                    co.ad_client_id = 1000003
-                    AND co.ad_org_id = 1000003
-                    AND co.docstatus IN ('CO')
-                    AND fa.preparedby IS NOT NULL
-                    AND fa.legalizedby IS NOT NULL
-                    AND  fa.approvedbyid IS NOT NULL
-                ORDER BY co.dateordered DESC, co.c_order_id DESC
-                LIMIT $1 OFFSET $2`;
-
+            FROM C_Order co
+            JOIN c_bpartner cb ON cb.c_bpartner_id = co.c_bpartner_id
+            JOIN c_bpartner_location cbl ON co.c_bpartner_location_id = cbl.c_bpartner_location_id
+            LEFT JOIN final_approvers fa ON fa.record_id = co.c_order_id
+            WHERE
+                co.ad_client_id = 1000003
+                AND co.ad_org_id = 1000003
+                AND fa.preparedby IS NOT NULL
+                AND fa.legalizedby IS NOT NULL
+                AND fa.approvedbyid IS NOT NULL
+                ${dynamicFilterString}
+            ORDER BY co.dateordered DESC, co.c_order_id DESC
+            LIMIT $${limitParamIndex} OFFSET $${offsetParamIndex}`;
 
             const totalCountQuery = `
             WITH wf_activities AS (
@@ -1115,20 +1424,23 @@ class Order {
             WHERE
                 co.ad_client_id = 1000003
                 AND co.ad_org_id = 1000003
-                AND co.docstatus IN ('CO')
                 AND fa.preparedby IS NOT NULL
                 AND fa.legalizedby IS NOT NULL
-                AND fa.approvedbyid IS NOT NULL`;
+                AND fa.approvedbyid IS NOT NULL
+                ${dynamicFilterString}`;
 
-            // Menjalankan kedua query secara bersamaan untuk efisiensi
+            // PENTING: Gabungkan values filter dengan pageSize dan offset untuk query utama
+            const queryParams = [...values, pageSize, offset];
+
+            // Untuk count query, hanya butuh values filter saja (tanpa limit/offset)
+            const countParams = [...values];
+
             const [result, totalCountResult] = await Promise.all([
-                dbClient.query(query, [pageSize, offset]),
-                dbClient.query(totalCountQuery)
+                dbClient.query(query, queryParams),
+                dbClient.query(totalCountQuery, countParams)
             ]);
 
             const totalCount = parseInt(totalCountResult.rows[0].count, 10);
-
-
 
             return {
                 success: true,
