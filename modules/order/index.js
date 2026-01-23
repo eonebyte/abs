@@ -631,7 +631,12 @@ class Order {
             const offset = (page - 1) * pageSize;
 
             let values = [];
-            let whereClauses = ["co.ad_client_id = 1000003", "co.ad_org_id = 1000003", "co.docstatus = 'IP'"];
+            let whereClauses = [
+                "co.ad_client_id = 1000003",
+                "co.ad_org_id = 1000003",
+                "co.docstatus = 'IP'",
+                "co.DateOrdered >= TO_DATE('01-01-2026', 'DD-MM-YYYY')"
+            ];
 
             // Filter utama berdasarkan userId
             if (userId) {
@@ -1256,7 +1261,9 @@ class Order {
             // Array untuk menampung nilai parameter ($1, $2, dst)
             const values = [];
             // Array untuk menampung string kondisi SQL
-            const whereConditions = [];
+            const whereConditions = [
+                "co.DateOrdered >= TO_DATE('01-01-2026', 'DD-MM-YYYY')",
+            ];
 
             // 1. Filter Dinamis
             if (documentNo) {
@@ -2083,7 +2090,9 @@ class Order {
 
             // 1. Inisialisasi Values dengan parameter wajib pertama ($1)
             let values = [userId];
-            let whereClauses = [];
+            let whereClauses = [
+                "co.DateOrdered >= TO_DATE('01-01-2026', 'DD-MM-YYYY')",
+            ];
 
             // 2. Filter Dinamis
             // Catatan: Saya ubah alias 'mr.' menjadi 'co.' karena Anda men-JOIN 'c_order co'

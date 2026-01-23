@@ -1,5 +1,5 @@
 export default async function purchaseOrderDone(fastify, opts) {
-    fastify.get('/done', async (request, reply) => {
+    fastify.get('/completed', async (request, reply) => {
         try {
             const page = parseInt(request.query.page, 10) || 1; // Default ke halaman 1 jika tidak ada
             const pageSize = parseInt(request.query.pageSize, 10) || 10; // Default 10 item per 
