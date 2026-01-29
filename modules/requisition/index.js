@@ -7,13 +7,13 @@ import axios from "axios";
 const baseUrlIdempiere = process.env.BASE_URL_IDEMPIERE;
 
 class Requisition {
-  async getPurchaseOnProgress(server, payload) {
+  async getPurchaseOnProgress(server, payload, page, pageSize) {
     let dbClient;
     try {
       dbClient = await server.pg.connect();
 
       const {
-        userId, // Ini adalah legalizedByid yang wajib
+        userId, // legalizedByid
         documentNo,
         m_warehouse_id,
         priority,
@@ -26,8 +26,9 @@ class Requisition {
         throw new Error("Parameter userId (legalizedByid) wajib diisi");
       }
 
-      // 1. Inisialisasi Clauses untuk Filter Dinamis
-      // Filter dasar: client, org, dan legalizedByid (sesuai logic awal Anda)
+      const offset = (page - 1) * pageSize;
+
+      // 1. Inisialisasi Clauses & Values
       const whereClauses = [
         `mr.ad_client_id = 1000003`,
         `mr.ad_org_id = 1000003`,
@@ -35,7 +36,7 @@ class Requisition {
       ];
       const values = [userId];
 
-      // 2. Tambahkan Filter Dinamis
+      // 2. Filter Dinamis
       if (documentNo) {
         values.push(`%${documentNo}%`);
         whereClauses.push(`mr.documentno ILIKE $${values.length}`);
@@ -56,7 +57,6 @@ class Requisition {
         whereClauses.push(`mr.createdby = $${values.length}`);
       }
 
-      // Status default 'IP' jika tidak ditentukan
       if (docstatus) {
         values.push(docstatus);
         whereClauses.push(`mr.docstatus = $${values.length}`);
@@ -64,13 +64,9 @@ class Requisition {
         whereClauses.push(`mr.docstatus = 'IP'`);
       }
 
-      // Filter by Role (Mencari user yang memiliki role tertentu)
+      // Filter by Role
       if (ad_role_id) {
-        const roleUsersQuery = `
-                SELECT aur.ad_user_id
-                FROM ad_user_roles aur
-                WHERE aur.ad_role_id = $1
-            `;
+        const roleUsersQuery = `SELECT ad_user_id FROM ad_user_roles WHERE ad_role_id = $1`;
         const resultRole = await dbClient.query(roleUsersQuery, [ad_role_id]);
         const userIds = resultRole.rows.map((r) => parseInt(r.ad_user_id));
 
@@ -79,15 +75,19 @@ class Requisition {
           whereClauses.push(`mr.createdby IN (${placeholders})`);
           values.push(...userIds);
         } else {
-          // Jika role diisi tapi tidak ada usernya, langsung return kosong
-          return { success: true, message: "No data found for this role", meta: { count: 0 }, data: [] };
+          return {
+            success: true,
+            message: "No data found for this role",
+            meta: { total: 0, count: 0, per_page: pageSize, current_page: page, total_pages: 0 },
+            data: []
+          };
         }
       }
 
-      const finalWhere = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+      const finalWhere = `WHERE ${whereClauses.join(" AND ")} AND fa.preparedby IS NOT NULL AND fa.legalizedby IS NOT NULL`;
 
-      // 3. Query Utama dengan CTE
-      const query = `
+      // 3. Definisi CTE (Common Table Expressions)
+      const cteBase = `
             WITH wf_activities AS (
                 SELECT DISTINCT ON (wfa.record_id, au.ad_user_id) wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
                 FROM ad_wf_activity wfa
@@ -125,6 +125,15 @@ class Requisition {
                 LEFT JOIN has_aborted h ON h.record_id = r.record_id
                 GROUP BY r.record_id, h.aborted
             )
+      `;
+
+      // 4. Query Total Count
+      const totalCountQuery = `${cteBase} SELECT COUNT(*) FROM M_Requisition mr LEFT JOIN final_approvers fa ON fa.record_id = mr.m_requisition_id ${finalWhere}`;
+
+      // 5. Query Data dengan Limit & Offset
+      const dataValues = [...values, pageSize, offset];
+      const dataQuery = `
+            ${cteBase}
             SELECT
                 mr.m_requisition_id, mr.documentno, mr.description,
                 mr.datedoc, mr.docstatus, fa.preparedby, fa.legalizedby, fa.approvedby,
@@ -132,17 +141,28 @@ class Requisition {
             FROM M_Requisition mr
             LEFT JOIN final_approvers fa ON fa.record_id = mr.m_requisition_id
             ${finalWhere}
-            AND fa.preparedby IS NOT NULL
-            AND fa.legalizedby IS NOT NULL
             ORDER BY mr.created DESC
+            LIMIT $${values.length + 1} OFFSET $${values.length + 2}
         `;
 
-      const result = await dbClient.query(query, values);
+      // Jalankan Query Secara Paralel
+      const [totalResult, result] = await Promise.all([
+        dbClient.query(totalCountQuery, values),
+        dbClient.query(dataQuery, dataValues),
+      ]);
+
+      const totalCount = parseInt(totalResult.rows[0].count, 10);
 
       return {
         success: true,
-        message: "Purchase orders workflow on progress fetched successfully",
-        meta: { count: result.rowCount },
+        message: result.rows.length > 0 ? "Purchase orders workflow on progress fetched successfully" : "No data found",
+        meta: {
+          total: totalCount,
+          count: result.rows.length,
+          per_page: pageSize,
+          current_page: page,
+          total_pages: Math.ceil(totalCount / pageSize),
+        },
         data: result.rows.map((row) => ({
           record_id: Number(row.m_requisition_id),
           documentNo: row.documentno,
@@ -157,8 +177,9 @@ class Requisition {
       server.log.error(error);
       return {
         success: false,
-        message: "Failed to fetch purchase orders",
+        message: "Internal Server Error",
         errors: [error.message],
+        meta: { total: 0, count: 0, per_page: pageSize, current_page: page, total_pages: 0 },
         data: [],
       };
     } finally {
@@ -166,7 +187,7 @@ class Requisition {
     }
   }
 
-  async getPurchaseDone(server, payload) {
+  async getPurchaseDone(server, payload, page, pageSize) {
     let dbClient;
     try {
       dbClient = await server.pg.connect();
@@ -180,8 +201,9 @@ class Requisition {
         ad_role_id
       } = payload;
 
+      const offset = (page - 1) * pageSize;
+
       // 1. Inisialisasi Clauses untuk Filter Dinamis
-      // Filter dasar: client, org, dan legalizedByid (sesuai logic awal Anda)
       const whereClauses = [
         `mr.ad_client_id = 1000003`,
         `mr.ad_org_id = 1000003`,
@@ -213,7 +235,7 @@ class Requisition {
         whereClauses.push(`mr.createdby = $${values.length}`);
       }
 
-      // Status default 'IP' jika tidak ditentukan
+      // Status default 'CO' (Completed) untuk Done
       if (docstatus) {
         values.push(docstatus);
         whereClauses.push(`mr.docstatus = $${values.length}`);
@@ -221,13 +243,9 @@ class Requisition {
         whereClauses.push(`mr.docstatus = 'CO'`);
       }
 
-      // Filter by Role (Mencari user yang memiliki role tertentu)
+      // Filter by Role
       if (ad_role_id) {
-        const roleUsersQuery = `
-                SELECT aur.ad_user_id
-                FROM ad_user_roles aur
-                WHERE aur.ad_role_id = $1
-            `;
+        const roleUsersQuery = `SELECT ad_user_id FROM ad_user_roles WHERE ad_role_id = $1`;
         const resultRole = await dbClient.query(roleUsersQuery, [ad_role_id]);
         const userIds = resultRole.rows.map((r) => parseInt(r.ad_user_id));
 
@@ -236,81 +254,100 @@ class Requisition {
           whereClauses.push(`mr.createdby IN (${placeholders})`);
           values.push(...userIds);
         } else {
-          // Jika role diisi tapi tidak ada usernya, langsung return kosong
-          return { success: true, message: "No data found for this role", meta: { count: 0 }, data: [] };
+          return {
+            success: true,
+            message: "No data found for this role",
+            meta: { total: 0, count: 0, per_page: pageSize, current_page: page, total_pages: 0 },
+            data: []
+          };
         }
       }
 
-      const finalWhereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+      const finalWhereString = `WHERE ${whereClauses.join(" AND ")}`;
 
-      const query = `
+      // 3. Definisi CTE Base
+      const cteBase = `
                 WITH wf_activities AS (
-                SELECT DISTINCT ON (wfa.record_id, au.ad_user_id)wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
-                FROM ad_wf_activity wfa
-                JOIN ad_user au ON wfa.ad_user_id = au.ad_user_id
-                WHERE wfa.ad_wf_node_id > 1000000 AND wfa.wfstate = 'CC' AND wfa.ad_table_id = 702 -- requisition
-                ORDER BY wfa.record_id, au.ad_user_id, wfa.created ASC
+                    SELECT DISTINCT ON (wfa.record_id, au.ad_user_id) wfa.record_id, wfa.created, au.name AS user_name, au.ad_user_id
+                    FROM ad_wf_activity wfa
+                    JOIN ad_user au ON wfa.ad_user_id = au.ad_user_id
+                    WHERE wfa.ad_wf_node_id > 1000000 AND wfa.wfstate = 'CC' AND wfa.ad_table_id = 702
+                    ORDER BY wfa.record_id, au.ad_user_id, wfa.created ASC
                 ),
                 ranked_approvers AS (
-                SELECT record_id, user_name, ad_user_id,
-                    ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY created) AS nourut
-                FROM wf_activities
+                    SELECT record_id, user_name, ad_user_id,
+                        ROW_NUMBER() OVER (PARTITION BY record_id ORDER BY created) AS nourut
+                    FROM wf_activities
                 ),
                 latest_process AS (
-                SELECT DISTINCT ON (record_id)
-                    ad_wf_process_id, record_id
-                FROM ad_wf_process
-                ORDER BY record_id, created DESC
+                    SELECT DISTINCT ON (record_id) ad_wf_process_id, record_id
+                    FROM ad_wf_process
+                    ORDER BY record_id, created DESC
                 ),
                 has_aborted AS (
-                SELECT lp.record_id,
-                    COUNT(*) FILTER (WHERE awa.wfstate = 'CA' AND awa.ad_wf_node_id > 1000000) > 0 AS aborted
-                FROM latest_process lp
-                JOIN ad_wf_activity awa ON awa.ad_wf_process_id = lp.ad_wf_process_id
-                GROUP BY lp.record_id
+                    SELECT lp.record_id,
+                        COUNT(*) FILTER (WHERE awa.wfstate = 'CA' AND awa.ad_wf_node_id > 1000000) > 0 AS aborted
+                    FROM latest_process lp
+                    JOIN ad_wf_activity awa ON awa.ad_wf_process_id = lp.ad_wf_process_id
+                    GROUP BY lp.record_id
                 ),
                 final_approvers AS (
-                SELECT
-                    r.record_id,
-                    MAX(CASE WHEN r.nourut = 1 THEN r.user_name END) AS preparedby,
-                     MAX(CASE WHEN r.nourut = 1 THEN r.ad_user_id END) AS preparedbyid,
-                    MAX(CASE
-                        WHEN h.aborted THEN NULL
-                        WHEN r.nourut = 2 THEN r.user_name
-                        END) AS legalizedby,
-                    MAX(CASE
-                        WHEN h.aborted THEN NULL
-                        WHEN r.nourut = 2 THEN r.ad_user_id
-                        END) AS legalizedbyid,
-                    MAX(CASE WHEN r.nourut = 3 THEN r.user_name END) AS approvedby,
-                     MAX(CASE WHEN r.nourut = 3 THEN r.ad_user_id END) AS approvedbyid
-                FROM ranked_approvers r
-                LEFT JOIN has_aborted h ON h.record_id = r.record_id
-                GROUP BY r.record_id, h.aborted
+                    SELECT
+                        r.record_id,
+                        MAX(CASE WHEN r.nourut = 1 THEN r.user_name END) AS preparedby,
+                        MAX(CASE WHEN r.nourut = 1 THEN r.ad_user_id END) AS preparedbyid,
+                        MAX(CASE WHEN h.aborted THEN NULL WHEN r.nourut = 2 THEN r.user_name END) AS legalizedby,
+                        MAX(CASE WHEN h.aborted THEN NULL WHEN r.nourut = 2 THEN r.ad_user_id END) AS legalizedbyid,
+                        MAX(CASE WHEN r.nourut = 3 THEN r.user_name END) AS approvedby,
+                        MAX(CASE WHEN r.nourut = 3 THEN r.ad_user_id END) AS approvedbyid
+                    FROM ranked_approvers r
+                    LEFT JOIN has_aborted h ON h.record_id = r.record_id
+                    GROUP BY r.record_id, h.aborted
                 )
+      `;
+
+      // 4. Query Total Count
+      const totalCountQuery = `${cteBase} SELECT COUNT(*) FROM M_Requisition mr LEFT JOIN final_approvers fa ON fa.record_id = mr.m_requisition_id ${finalWhereString}`;
+
+      // 5. Query Data
+      const dataValues = [...values, pageSize, offset];
+      const dataQuery = `
+                ${cteBase}
                 SELECT
-                mr.m_requisition_id, mr.documentno, mr.description,
-                mr.datedoc, mr.docstatus, fa.preparedby, fa.legalizedby, fa.approvedby,
-                fa.preparedbyid, fa.legalizedbyid, fa.approvedbyid
+                    mr.m_requisition_id, mr.documentno, mr.description,
+                    mr.datedoc, mr.docstatus, fa.preparedby, fa.legalizedby, fa.approvedby,
+                    fa.preparedbyid, fa.legalizedbyid, fa.approvedbyid
                 FROM M_Requisition mr
                 LEFT JOIN final_approvers fa ON fa.record_id = mr.m_requisition_id
                 ${finalWhereString}
-                    `;
+                ORDER BY mr.updated DESC
+                LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+            `;
 
-      const result = await dbClient.query(query, values);
+      // Eksekusi Query paralel
+      const [totalCountResult, result] = await Promise.all([
+        dbClient.query(totalCountQuery, values),
+        dbClient.query(dataQuery, dataValues),
+      ]);
+
+      const totalCount = parseInt(totalCountResult.rows[0].count, 10);
 
       return {
         success: true,
-        message: "Purchase orders workflow on progress fetched successfully",
-        meta: { count: result.rowCount },
+        message: result.rows.length > 0 ? "Purchase orders done fetched successfully" : "No data found",
+        meta: {
+          total: totalCount,
+          count: result.rows.length,
+          per_page: pageSize,
+          current_page: page,
+          total_pages: Math.ceil(totalCount / pageSize),
+        },
         data: result.rows.map((row) => ({
           record_id: Number(row.m_requisition_id),
           documentNo: row.documentno,
           description: row.description,
-          plant: row.plant,
-          vendor: row.vendor,
-          dateOrdered: row.dateordered,
           docStatus: row.docstatus,
+          dateDoc: row.datedoc,
           preparedBy: row.preparedby,
           legalizedBy: row.legalizedby,
           approvedBy: row.approvedby,
@@ -320,8 +357,9 @@ class Requisition {
       server.log.error(error);
       return {
         success: false,
-        message: "Failed to fetch purchase orders workflow on progress",
+        message: "Internal Server Error",
         errors: [error.message],
+        meta: { total: 0, count: 0, per_page: pageSize, current_page: page, total_pages: 0 },
         data: [],
       };
     } finally {
